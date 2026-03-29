@@ -5,7 +5,7 @@ const HTML_CODE = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>WinGo AI Ultra Pro V5 Pro</title>
+<title>WinGo AI Ultra Pro V6 Pro</title>
 <style>
 :root{
   --bg:#04040f;
@@ -580,7 +580,7 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,26,48,.6);}
   </div>
 
   <button class="btn-refresh" id="refreshBtn" onclick="doRefresh()">&#8635;&nbsp; Refresh &amp; Re-Analyze</button>
-  <div class="footer">V5 Pro &bull; Hard Loss Guard: max 1 loss &bull; 5 detectors &bull; Consensus Lock</div>
+  <div class="footer">V6 Pro &bull; Hard Loss Guard &bull; 5 Detectors &bull; Instant Load</div>
 </div>
 
 <script>
@@ -597,15 +597,22 @@ var busy=false,proxyIdx=0;
 var lastPredPeriod='',lastPred='',lastPredType='';
 var apiOk=false;
 
-// ---- LOADER FIX: always hide after max 5s ----
-var LOADER_MAX_MS=3000;
-var loaderTimeout=setTimeout(function(){hideLoader();},LOADER_MAX_MS);
+// ---- LOADER: always hide after max 1.5s, decoupled from API ----
+var _loaderHidden=false;
 function hideLoader(){
-  clearTimeout(loaderTimeout);
+  if(_loaderHidden) return;
+  _loaderHidden=true;
   var el=document.getElementById('loader');
+  if(!el) return;
   el.classList.add('hiding');
-  setTimeout(function(){el.style.display='none';},500);
+  setTimeout(function(){if(el){el.style.display='none';el.style.visibility='hidden';}},400);
 }
+// Multiple independent fallbacks - loader hides FAST no matter what
+setTimeout(hideLoader, 800);
+setTimeout(hideLoader, 1500);
+setTimeout(hideLoader, 3000);
+window.addEventListener('load',function(){hideLoader();});
+document.addEventListener('DOMContentLoaded',function(){setTimeout(hideLoader,500);});
 
 function numInfo(n){
   var num=parseInt(n)||0;
@@ -614,27 +621,55 @@ function numInfo(n){
   return{num:num,big:big,col:col,size:big?'Big':'Small'};
 }
 
-function fetchWithTimeout(url, ms){
-  var ctrl=new AbortController();
-  var tid=setTimeout(function(){ctrl.abort();},ms);
-  return fetch(url,{signal:ctrl.signal}).finally(function(){clearTimeout(tid);});
-}
-async function fetchData(){
-  // Direct fetch
-  try{
-    var r=await fetchWithTimeout(API+'?pageNo=1&pageSize=200',5000);
-    if(r.ok){apiOk=true;return await r.json();}
-  }catch(e){}
-  // Try proxies
-  for(var i=0;i<PROXIES.length;i++){
-    try{
-      var u=PROXIES[(proxyIdx+i)%PROXIES.length]+encodeURIComponent(API+'?pageNo=1&pageSize=200');
-      var r2=await fetchWithTimeout(u,8000);
-      if(r2.ok){proxyIdx=(proxyIdx+i)%PROXIES.length;apiOk=true;return await r2.json();}
-    }catch(e){}
-  }
-  apiOk=false;
-  return null;
+// Smart fetch with all proxy options - V7 Ultra Fix
+function fetchData(){
+  var fullUrl=API+'?pageNo=1&pageSize=200';
+  var enc=encodeURIComponent(fullUrl);
+  // Proxies: [url, parseMode] - parseMode 'ao' = allorigins /get format
+  var proxies=[
+    ['https://api.allorigins.win/raw?url='+enc,'json'],
+    ['https://corsproxy.io/?'+enc,'json'],
+    ['https://api.codetabs.com/v1/proxy?quest='+enc,'json'],
+    ['https://api.allorigins.win/get?url='+enc,'ao'],
+    ['https://cors.eu.org/'+fullUrl,'json'],
+    ['https://api.cors.lol/?url='+enc,'json'],
+    ['https://worker.bridged.cc/cors-anywhere/'+fullUrl,'json']
+  ];
+  return new Promise(function(resolve){
+    var failed=0;
+    var total=proxies.length;
+    var done=false;
+    var hardTimer=setTimeout(function(){
+      if(!done){done=true;apiOk=false;resolve(null);}
+    },9000);
+    proxies.forEach(function(pair){
+      var purl=pair[0],mode=pair[1];
+      var ctrl=new AbortController();
+      var t=setTimeout(function(){ctrl.abort();},7000);
+      fetch(purl,{signal:ctrl.signal,cache:'no-store'})
+        .then(function(r){
+          clearTimeout(t);
+          if(!r.ok) throw new Error('bad');
+          return r.json();
+        })
+        .then(function(json){
+          clearTimeout(t);
+          if(done) return;
+          var data=json;
+          if(mode==='ao'){
+            if(json.contents){
+              try{data=JSON.parse(json.contents);}catch(e){failed++;if(failed>=total&&!done){done=true;clearTimeout(hardTimer);apiOk=false;resolve(null);}return;}
+            } else {failed++;if(failed>=total&&!done){done=true;clearTimeout(hardTimer);apiOk=false;resolve(null);}return;}
+          }
+          if(!done){done=true;clearTimeout(hardTimer);apiOk=true;resolve(data);}
+        })
+        .catch(function(){
+          clearTimeout(t);
+          failed++;
+          if(failed>=total&&!done){done=true;clearTimeout(hardTimer);apiOk=false;resolve(null);}
+        });
+    });
+  });
 }
 
 function parseData(data){
@@ -1114,7 +1149,13 @@ async function analyze(){
   setProgress(8,'Fetching live data...');
   
   var data=null;
-  try{data=await fetchData();}catch(e){}
+  try{
+    var fetchRace=Promise.race([
+      fetchData(),
+      new Promise(function(resolve){setTimeout(function(){resolve(null);},8000);})
+    ]);
+    data=await fetchRace;
+  }catch(e){data=null;}
   
   var fresh=parseData(data);
   if(fresh.length) mergeHistory(fresh);
@@ -1196,7 +1237,7 @@ export default function App() {
     const a = anchorRef.current;
     if (!a) return;
     a.href = url;
-    a.download = "wingo-ultra-v4.html";
+    a.download = "wingo-ultra-v7.html";
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
@@ -1336,7 +1377,7 @@ export default function App() {
           }}
         >
           <span style={{ fontSize: 22 }}>⬇️</span>
-          Download V4 HTML File
+          Download V7 HTML File
         </button>
 
         <p
@@ -1349,7 +1390,7 @@ export default function App() {
         >
           Download karke Chrome mein open karo
           <br />
-          <span style={{ color: "#4a5568" }}>wingo-ultra-v4.html</span>
+          <span style={{ color: "#4a5568" }}>wingo-ultra-v7.html</span>
         </p>
       </div>
 
